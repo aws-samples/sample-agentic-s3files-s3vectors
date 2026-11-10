@@ -1,0 +1,82 @@
+# Render with: envsubst '$ECR_REGISTRY' < config_files/k8s/ui.yaml | kubectl apply -f -
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pipeline-api
+  namespace: invoiceiq
+  labels: { app: pipeline-api, tier: ui }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: pipeline-api }
+  template:
+    metadata:
+      labels: { app: pipeline-api, tier: ui }
+    spec:
+      serviceAccountName: invoiceiq-pipeline-api-sa
+      nodeSelector: { kubernetes.io/arch: amd64 }
+      containers:
+        - name: pipeline-api
+          image: "${ECR_REGISTRY}/invoiceiq-pipeline-api:latest"
+          imagePullPolicy: Always
+          ports: [{ containerPort: 3000 }]
+          env:
+            - { name: S3_FILES_MOUNT, value: /mnt/s3files }
+          readinessProbe:
+            httpGet: { path: /healthz, port: 3000 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          volumeMounts:
+            - { name: s3-files, mountPath: /mnt/s3files }
+      volumes:
+        - name: s3-files
+          persistentVolumeClaim: { claimName: s3-files-pvc }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pipeline-api
+  namespace: invoiceiq
+spec:
+  type: ClusterIP
+  selector: { app: pipeline-api }
+  ports: [{ port: 80, targetPort: 3000 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+  namespace: invoiceiq
+  labels: { app: frontend, tier: ui }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: frontend }
+  template:
+    metadata:
+      labels: { app: frontend, tier: ui }
+    spec:
+      nodeSelector: { kubernetes.io/arch: amd64 }
+      containers:
+        - name: frontend
+          image: "${ECR_REGISTRY}/invoiceiq-frontend:latest"
+          imagePullPolicy: Always
+          ports: [{ containerPort: 3000 }]
+          resources:
+            requests: { memory: 128Mi, cpu: 100m }
+            limits: { memory: 256Mi, cpu: 250m }
+          readinessProbe:
+            httpGet: { path: /, port: 3000 }
+            periodSeconds: 5
+---
+# ClusterIP on purpose: the dashboard's upload endpoint is unauthenticated.
+# Reach it with: kubectl port-forward -n invoiceiq svc/frontend 8080:80
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend
+  namespace: invoiceiq
+spec:
+  type: ClusterIP
+  selector: { app: frontend }
+  ports: [{ port: 80, targetPort: 3000 }]

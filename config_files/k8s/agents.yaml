@@ -1,0 +1,139 @@
+# The four prebuilt agents. You build and deploy the fifth (validator) yourself.
+# Render with: envsubst '$ECR_REGISTRY $AWS_REGION $AGENT_MODEL $EMBED_MODEL $VECTOR_BUCKET $VECTOR_INDEX $SQS_QUEUE_URL' < config_files/k8s/agents.yaml | kubectl apply -f -
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: orchestrator
+  namespace: invoiceiq
+  labels: { app: orchestrator, tier: agent }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: orchestrator }
+  template:
+    metadata:
+      labels: { app: orchestrator, tier: agent }
+    spec:
+      serviceAccountName: invoiceiq-agent-sa
+      nodeSelector: { kubernetes.io/arch: amd64 }
+      containers:
+        - name: orchestrator
+          image: "${ECR_REGISTRY}/invoiceiq-orchestrator:latest"
+          imagePullPolicy: Always
+          env:
+            - { name: AWS_REGION, value: "${AWS_REGION}" }
+            - { name: AGENT_MODEL, value: "${AGENT_MODEL}" }
+            - { name: EMBED_MODEL, value: "${EMBED_MODEL}" }
+            - { name: VECTOR_BUCKET, value: "${VECTOR_BUCKET}" }
+            - { name: VECTOR_INDEX, value: "${VECTOR_INDEX}" }
+            - { name: S3_FILES_MOUNT, value: /mnt/s3files }
+            - { name: PYTHONUNBUFFERED, value: "1" }
+            - { name: SQS_QUEUE_URL, value: "${SQS_QUEUE_URL}" }
+          volumeMounts:
+            - { name: s3-files, mountPath: /mnt/s3files }
+      volumes:
+        - name: s3-files
+          persistentVolumeClaim: { claimName: s3-files-pvc }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: classifier
+  namespace: invoiceiq
+  labels: { app: classifier, tier: agent }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: classifier }
+  template:
+    metadata:
+      labels: { app: classifier, tier: agent }
+    spec:
+      serviceAccountName: invoiceiq-agent-sa
+      nodeSelector: { kubernetes.io/arch: amd64 }
+      containers:
+        - name: classifier
+          image: "${ECR_REGISTRY}/invoiceiq-classifier:latest"
+          imagePullPolicy: Always
+          env:
+            - { name: AWS_REGION, value: "${AWS_REGION}" }
+            - { name: AGENT_MODEL, value: "${AGENT_MODEL}" }
+            - { name: EMBED_MODEL, value: "${EMBED_MODEL}" }
+            - { name: VECTOR_BUCKET, value: "${VECTOR_BUCKET}" }
+            - { name: VECTOR_INDEX, value: "${VECTOR_INDEX}" }
+            - { name: S3_FILES_MOUNT, value: /mnt/s3files }
+            - { name: PYTHONUNBUFFERED, value: "1" }
+          volumeMounts:
+            - { name: s3-files, mountPath: /mnt/s3files }
+      volumes:
+        - name: s3-files
+          persistentVolumeClaim: { claimName: s3-files-pvc }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: extractor
+  namespace: invoiceiq
+  labels: { app: extractor, tier: agent }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: extractor }
+  template:
+    metadata:
+      labels: { app: extractor, tier: agent }
+    spec:
+      serviceAccountName: invoiceiq-agent-sa
+      nodeSelector: { kubernetes.io/arch: amd64 }
+      containers:
+        - name: extractor
+          image: "${ECR_REGISTRY}/invoiceiq-extractor:latest"
+          imagePullPolicy: Always
+          env:
+            - { name: AWS_REGION, value: "${AWS_REGION}" }
+            - { name: AGENT_MODEL, value: "${AGENT_MODEL}" }
+            - { name: EMBED_MODEL, value: "${EMBED_MODEL}" }
+            - { name: VECTOR_BUCKET, value: "${VECTOR_BUCKET}" }
+            - { name: VECTOR_INDEX, value: "${VECTOR_INDEX}" }
+            - { name: S3_FILES_MOUNT, value: /mnt/s3files }
+            - { name: PYTHONUNBUFFERED, value: "1" }
+          volumeMounts:
+            - { name: s3-files, mountPath: /mnt/s3files }
+      volumes:
+        - name: s3-files
+          persistentVolumeClaim: { claimName: s3-files-pvc }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: embedder
+  namespace: invoiceiq
+  labels: { app: embedder, tier: agent }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: embedder }
+  template:
+    metadata:
+      labels: { app: embedder, tier: agent }
+    spec:
+      serviceAccountName: invoiceiq-agent-sa
+      nodeSelector: { kubernetes.io/arch: amd64 }
+      containers:
+        - name: embedder
+          image: "${ECR_REGISTRY}/invoiceiq-embedder:latest"
+          imagePullPolicy: Always
+          env:
+            - { name: AWS_REGION, value: "${AWS_REGION}" }
+            - { name: AGENT_MODEL, value: "${AGENT_MODEL}" }
+            - { name: EMBED_MODEL, value: "${EMBED_MODEL}" }
+            - { name: VECTOR_BUCKET, value: "${VECTOR_BUCKET}" }
+            - { name: VECTOR_INDEX, value: "${VECTOR_INDEX}" }
+            - { name: S3_FILES_MOUNT, value: /mnt/s3files }
+            - { name: PYTHONUNBUFFERED, value: "1" }
+          volumeMounts:
+            - { name: s3-files, mountPath: /mnt/s3files }
+      volumes:
+        - name: s3-files
+          persistentVolumeClaim: { claimName: s3-files-pvc }

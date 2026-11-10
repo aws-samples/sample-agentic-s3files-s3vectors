@@ -1,0 +1,20 @@
+version: 0.2
+# Builds and pushes all seven InvoiceIQ images. Run by scripts/build_images.sh.
+phases:
+  pre_build:
+    commands:
+      - aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "$ECR_REGISTRY"
+      - aws ecr-public get-login-password --region us-east-1 | docker login --username AWS --password-stdin public.ecr.aws || echo "public ECR login skipped (anonymous pulls)"
+  build:
+    commands:
+      - |
+        set -e
+        for svc in orchestrator classifier extractor validator embedder pipeline-api frontend; do
+          uri="${ECR_REGISTRY}/invoiceiq-${svc}:latest"
+          for attempt in 1 2 3; do
+            if docker build -t "$uri" "containers/${svc}"; then break; fi
+            if [ "$attempt" = 3 ]; then echo "build failed for ${svc}"; exit 1; fi
+            echo "retrying ${svc} build (attempt ${attempt} failed)"; sleep 15
+          done
+          docker push "$uri"
+        done
