@@ -1,0 +1,27 @@
+# Render with: envsubst '$S3FILES_FS_ID' < config_files/k8s/storage.yaml | kubectl apply -f -
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: s3files-sc
+provisioner: efs.csi.aws.com
+parameters:
+  provisioningMode: s3files-ap   # the driver creates an S3 Files access point per claim
+  fileSystemId: "${S3FILES_FS_ID}"
+  directoryPerms: "777"          # every agent can read and write the shared directories
+  uid: "0"                       # access point operates as root, which owns the bucket root
+  gid: "0"
+  basePath: "/"                  # map to the bucket root ...
+  subPathPattern: "."            # ... with no per-claim subdirectory
+  ensureUniqueDirectory: "false"
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: s3-files-pvc
+  namespace: invoiceiq
+spec:
+  accessModes: [ReadWriteMany]   # all pods share one mount
+  storageClassName: s3files-sc
+  resources:
+    requests:
+      storage: 1200Gi            # required field; S3 Files ignores it

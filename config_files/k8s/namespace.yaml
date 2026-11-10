@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: invoiceiq
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: invoiceiq-agent-sa
+  namespace: invoiceiq
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: invoiceiq-pipeline-api-sa
+  namespace: invoiceiq

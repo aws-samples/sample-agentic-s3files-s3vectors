@@ -1,0 +1,43 @@
+# The validator you build: your validator/agent.py, mounted from a ConfigMap into a stock
+# Python image. Create the ConfigMap first:
+#   kubectl create configmap validator-code -n invoiceiq --from-file=validator/agent.py
+# Render with: envsubst '$AWS_REGION $AGENT_MODEL $EMBED_MODEL $VECTOR_BUCKET $VECTOR_INDEX' < config_files/k8s/validator.yaml | kubectl apply -f -
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: validator
+  namespace: invoiceiq
+  labels: { app: validator, tier: agent }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: validator }
+  template:
+    metadata:
+      labels: { app: validator, tier: agent }
+    spec:
+      serviceAccountName: invoiceiq-agent-sa
+      containers:
+        - name: validator
+          image: public.ecr.aws/docker/library/python:3.11-slim
+          command: ["/bin/sh", "-c"]
+          args: ["pip install --quiet --retries 5 strands-agents boto3 && exec python /app/agent.py"]
+          env:
+            - { name: AWS_REGION, value: "${AWS_REGION}" }
+            - { name: AGENT_MODEL, value: "${AGENT_MODEL}" }
+            - { name: EMBED_MODEL, value: "${EMBED_MODEL}" }
+            - { name: VECTOR_BUCKET, value: "${VECTOR_BUCKET}" }
+            - { name: VECTOR_INDEX, value: "${VECTOR_INDEX}" }
+            - { name: S3_FILES_MOUNT, value: /mnt/s3files }
+            - { name: ANOMALY_FACTOR, value: "3" }
+            - { name: NEAR_DUP_DISTANCE, value: "0.10" }
+            - { name: CATEGORY_DISTANCE, value: "0.45" }
+            - { name: PYTHONUNBUFFERED, value: "1" }
+          volumeMounts:
+            - { name: code, mountPath: /app }
+            - { name: s3-files, mountPath: /mnt/s3files }
+      volumes:
+        - name: code
+          configMap: { name: validator-code }
+        - name: s3-files
+          persistentVolumeClaim: { claimName: s3-files-pvc }

@@ -1,0 +1,21 @@
+# Alternative: put the cluster in an existing VPC (use this if you are at your VPC quota).
+# The two private subnets must be in different AZs and have a route to the internet
+# (NAT gateway) so nodes can pull images and reach Amazon Bedrock.
+# export EXISTING_PRIVATE_SUBNET_1=subnet-... EXISTING_PRIVATE_SUBNET_2=subnet-...
+# envsubst < config_files/eksctl_cluster_existing_vpc.yaml | eksctl create cluster -f -
+apiVersion: eksctl.io/v1alpha5
+kind: ClusterConfig
+metadata:
+  name: "${CLUSTER_NAME}"
+  region: "${AWS_REGION}"
+  version: "1.33"
+  tags:
+    project: invoiceiq
+vpc:
+  subnets:
+    private:
+      private1: { id: "${EXISTING_PRIVATE_SUBNET_1}" }
+      private2: { id: "${EXISTING_PRIVATE_SUBNET_2}" }
+autoModeConfig:
+  enabled: true
+  nodePools: [general-purpose, system]

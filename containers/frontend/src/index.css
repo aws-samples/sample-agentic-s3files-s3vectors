@@ -1,0 +1,79 @@
+@import url('https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap');
+
+:root {
+  /* Agentic (right) palette — AWS Cloudscape-inspired */
+  --ag-bg: #f2f3f3;
+  --ag-surface: #ffffff;
+  --ag-surface-alt: #fafafa;
+  --ag-ink: #0f1b2a;
+  --ag-ink-soft: #414d5c;
+  --ag-ink-mute: #5f6b7a;
+  --ag-line: #e9ebed;
+  --ag-line-soft: #eaeded;
+  --ag-line-strong: #b6bec9;
+  --ag-nav: #000716;
+  --ag-nav-soft: #232f3e;
+  --ag-accent: #0972d3;        /* AWS action blue */
+  --ag-accent-hover: #033160;
+  --ag-accent-soft: #f2f8fd;
+  --ag-pos: #037f0c;
+  --ag-pos-soft: #f2fcf3;
+  --ag-warn: #855900;
+  --ag-warn-soft: #fffce9;
+  --ag-err: #d91515;
+  --ag-err-soft: #fff5f5;
+  --ag-purple: #8b5cf6;        /* used for "AI / agentic" accents */
+  --ag-shadow-sm: 0 1px 1px rgba(0, 7, 22, 0.06), 0 1px 0 rgba(0, 7, 22, 0.04);
+  --ag-shadow-md: 0 1px 4px rgba(0, 7, 22, 0.10), 0 1px 1px rgba(0, 7, 22, 0.05);
+  --ag-shadow-lg: 0 4px 12px rgba(0, 7, 22, 0.12), 0 1px 2px rgba(0, 7, 22, 0.06);
+
+  /* Legacy (left) palette — turn-of-the-millennium enterprise */
+  --lg-chrome: #ece9d8;
+  --lg-chrome-2: #d4d0c8;
+  --lg-bg: #f0f0f0;
+  --lg-canvas: #ffffff;
+  --lg-text: #000000;
+  --lg-text-mute: #404040;
+  --lg-border: #808080;
+  --lg-border-light: #c0c0c0;
+  --lg-shadow: #404040;
+  --lg-link: #0000ee;
+  --lg-link-visited: #551a8b;
+  --lg-titlebar-1: #0a246a;
+  --lg-titlebar-2: #3a6ea5;
+  --lg-titlebar-3: #6f9dd9;
+  --lg-statusbar: #d4d0c8;
+
+  font-family: 'Open Sans', 'Amazon Ember', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+  color-scheme: light;
+  color: var(--ag-ink);
+  background-color: var(--ag-bg);
+
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  background: var(--ag-bg);
+}
+
+body {
+  display: block;
+}
+
+#root {
+  width: 100%;
+  height: 100vh;
+}
+
+* {
+  box-sizing: border-box;
+}

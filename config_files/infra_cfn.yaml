@@ -1,0 +1,445 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  InvoiceIQ - supporting infrastructure for a multi-agent invoice pipeline on Amazon EKS,
+  Amazon S3 Files, Amazon S3 Vectors and Amazon Bedrock. The EKS cluster is created
+  separately with eksctl; the S3 Files file system and the S3 Vectors index are created
+  with the AWS CLI as part of the walkthrough.
+
+Parameters:
+  VectorIndexName:
+    Type: String
+    Default: invoice-history
+    Description: Name of the Amazon S3 Vectors index that holds vendor history.
+
+Resources:
+  # ---------------------------------------------------------------------------
+  # Storage
+  # ---------------------------------------------------------------------------
+  InvoiceBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "invoiceiq-invoices-${AWS::AccountId}-${AWS::Region}"
+      VersioningConfiguration:
+        Status: Enabled # required by Amazon S3 Files
+      NotificationConfiguration:
+        EventBridgeConfiguration:
+          EventBridgeEnabled: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+
+  # Holds the zipped container sources CodeBuild builds from. Kept separate from
+  # the invoice bucket, which is linked to S3 Files and would sync anything put in it.
+  ArtifactBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireBuildSources
+            Status: Enabled
+            ExpirationInDays: 7
+
+  # ---------------------------------------------------------------------------
+  # Container registries (one per image)
+  # ---------------------------------------------------------------------------
+  OrchestratorRepo:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: invoiceiq-orchestrator
+      EmptyOnDelete: true
+      ImageScanningConfiguration: { ScanOnPush: true }
+  ClassifierRepo:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: invoiceiq-classifier
+      EmptyOnDelete: true
+      ImageScanningConfiguration: { ScanOnPush: true }
+  ExtractorRepo:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: invoiceiq-extractor
+      EmptyOnDelete: true
+      ImageScanningConfiguration: { ScanOnPush: true }
+  ValidatorRepo:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: invoiceiq-validator
+      EmptyOnDelete: true
+      ImageScanningConfiguration: { ScanOnPush: true }
+  EmbedderRepo:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: invoiceiq-embedder
+      EmptyOnDelete: true
+      ImageScanningConfiguration: { ScanOnPush: true }
+  PipelineApiRepo:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: invoiceiq-pipeline-api
+      EmptyOnDelete: true
+      ImageScanningConfiguration: { ScanOnPush: true }
+  FrontendRepo:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: invoiceiq-frontend
+      EmptyOnDelete: true
+      ImageScanningConfiguration: { ScanOnPush: true }
+
+  # ---------------------------------------------------------------------------
+  # Intake: S3 upload to incoming/ -> EventBridge -> SQS -> orchestrator
+  # ---------------------------------------------------------------------------
+  IntakeDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: invoiceiq-invoice-intake-dlq
+      MessageRetentionPeriod: 1209600
+      SqsManagedSseEnabled: true
+
+  IntakeQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: invoiceiq-invoice-intake
+      VisibilityTimeout: 900
+      ReceiveMessageWaitTimeSeconds: 20
+      SqsManagedSseEnabled: true
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt IntakeDLQ.Arn
+        maxReceiveCount: 3
+
+  InvoiceUploadedRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: Route new invoices in incoming/ to the intake queue.
+      State: ENABLED
+      EventPattern:
+        source: [aws.s3]
+        detail-type: [Object Created]
+        detail:
+          bucket:
+            name: [!Ref InvoiceBucket]
+          object:
+            key: [{ prefix: incoming/ }]
+      Targets:
+        - Id: IntakeQueue
+          Arn: !GetAtt IntakeQueue.Arn
+
+  IntakeQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues: [!Ref IntakeQueue]
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowEventBridgeRule
+            Effect: Allow
+            Principal: { Service: events.amazonaws.com }
+            Action: sqs:SendMessage
+            Resource: !GetAtt IntakeQueue.Arn
+            Condition:
+              ArnEquals:
+                aws:SourceArn: !GetAtt InvoiceUploadedRule.Arn
+
+  # ---------------------------------------------------------------------------
+  # IAM
+  # ---------------------------------------------------------------------------
+  # Role Amazon S3 Files assumes to synchronize the file system with the bucket.
+  S3FilesDataAccessRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: elasticfilesystem.amazonaws.com }
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+      Policies:
+        - PolicyName: BucketAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [s3:ListBucket, s3:ListBucketVersions]
+                Resource: !GetAtt InvoiceBucket.Arn
+                Condition: { StringEquals: { aws:ResourceAccount: !Ref AWS::AccountId } }
+              - Effect: Allow
+                Action:
+                  - s3:AbortMultipartUpload
+                  - s3:DeleteObject*
+                  - s3:GetObject*
+                  - s3:List*
+                  - s3:PutObject*
+                Resource: !Sub "${InvoiceBucket.Arn}/*"
+                Condition: { StringEquals: { aws:ResourceAccount: !Ref AWS::AccountId } }
+              - Effect: Allow
+                Action:
+                  - events:DeleteRule
+                  - events:DisableRule
+                  - events:EnableRule
+                  - events:PutRule
+                  - events:PutTargets
+                  - events:RemoveTargets
+                Resource: !Sub "arn:${AWS::Partition}:events:*:${AWS::AccountId}:rule/DO-NOT-DELETE-S3-Files*"
+                Condition: { StringEquals: { events:ManagedBy: elasticfilesystem.amazonaws.com } }
+              - Effect: Allow
+                Action:
+                  - events:DescribeRule
+                  - events:ListRuleNamesByTarget
+                  - events:ListRules
+                  - events:ListTargetsByRule
+                Resource: !Sub "arn:${AWS::Partition}:events:*:${AWS::AccountId}:rule/*"
+
+  # EFS CSI driver (mounts S3 Files on EKS) - bound through EKS Pod Identity.
+  CsiControllerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: pods.eks.amazonaws.com }
+            Action: [sts:AssumeRole, sts:TagSession]
+      ManagedPolicyArns:
+        - !Sub "arn:${AWS::Partition}:iam::aws:policy/service-role/AmazonS3FilesCSIDriverPolicy"
+
+  CsiNodeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: pods.eks.amazonaws.com }
+            Action: [sts:AssumeRole, sts:TagSession]
+      ManagedPolicyArns:
+        - !Sub "arn:${AWS::Partition}:iam::aws:policy/AmazonS3FilesClientFullAccess"
+        - !Sub "arn:${AWS::Partition}:iam::aws:policy/AmazonElasticFileSystemsUtils"
+      Policies:
+        - PolicyName: InvoiceBucketRead
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [s3:GetObject, s3:GetObjectVersion]
+                Resource: !Sub "${InvoiceBucket.Arn}/*"
+              - Effect: Allow
+                Action: s3:ListBucket
+                Resource: !GetAtt InvoiceBucket.Arn
+
+  # Shared by the five agents.
+  AgentRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: pods.eks.amazonaws.com }
+            Action: [sts:AssumeRole, sts:TagSession]
+      ManagedPolicyArns:
+        - !Sub "arn:${AWS::Partition}:iam::aws:policy/AmazonS3FilesClientFullAccess"
+      Policies:
+        - PolicyName: AgentPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: S3ObjectRead
+                Effect: Allow
+                Action: [s3:GetObject, s3:GetObjectVersion]
+                Resource: !Sub "${InvoiceBucket.Arn}/*"
+              - Sid: S3BucketList
+                Effect: Allow
+                Action: s3:ListBucket
+                Resource: !GetAtt InvoiceBucket.Arn
+              - Sid: SQSIntake
+                Effect: Allow
+                Action:
+                  - sqs:ReceiveMessage
+                  - sqs:DeleteMessage
+                  - sqs:GetQueueAttributes
+                  - sqs:ChangeMessageVisibility
+                Resource: !GetAtt IntakeQueue.Arn
+              - Sid: InvokeBedrock
+                Effect: Allow
+                Action: [bedrock:InvokeModel, bedrock:InvokeModelWithResponseStream]
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:bedrock:*::foundation-model/*"
+                  - !Sub "arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:inference-profile/*"
+              - Sid: S3VectorsMemory
+                Effect: Allow
+                Action:
+                  - s3vectors:QueryVectors
+                  - s3vectors:GetVectors
+                  - s3vectors:PutVectors
+                  - s3vectors:ListVectors
+                  - s3vectors:GetIndex
+                Resource: !Sub "arn:${AWS::Partition}:s3vectors:${AWS::Region}:${AWS::AccountId}:bucket/invoiceiq-memory-${AWS::AccountId}-${AWS::Region}/index/*"
+              - Sid: S3VectorsBucket
+                Effect: Allow
+                Action: [s3vectors:ListIndexes, s3vectors:GetVectorBucket]
+                Resource: !Sub "arn:${AWS::Partition}:s3vectors:${AWS::Region}:${AWS::AccountId}:bucket/invoiceiq-memory-${AWS::AccountId}-${AWS::Region}"
+
+  # Read-only dashboard backend.
+  PipelineApiRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: pods.eks.amazonaws.com }
+            Action: [sts:AssumeRole, sts:TagSession]
+      ManagedPolicyArns:
+        - !Sub "arn:${AWS::Partition}:iam::aws:policy/AmazonS3FilesClientFullAccess"
+      Policies:
+        - PolicyName: InvoiceBucketRead
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [s3:GetObject, s3:GetObjectVersion]
+                Resource: !Sub "${InvoiceBucket.Arn}/*"
+              - Effect: Allow
+                Action: s3:ListBucket
+                Resource: !GetAtt InvoiceBucket.Arn
+
+  # ---------------------------------------------------------------------------
+  # Image builder (so you do not need Docker locally)
+  # ---------------------------------------------------------------------------
+  ImageBuildLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: /aws/codebuild/invoiceiq-image-builder
+      RetentionInDays: 14
+
+  ImageBuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: codebuild.amazonaws.com }
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+      Policies:
+        - PolicyName: ImageBuild
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: Logs
+                Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !Sub "${ImageBuildLogGroup.Arn}:*"
+              - Sid: Source
+                Effect: Allow
+                Action: [s3:GetObject, s3:GetObjectVersion]
+                Resource: !Sub "${ArtifactBucket.Arn}/*"
+              - Sid: EcrAuth
+                Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: "*"
+              - Sid: EcrPush
+                Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:BatchGetImage
+                  - ecr:CompleteLayerUpload
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:InitiateLayerUpload
+                  - ecr:PutImage
+                  - ecr:UploadLayerPart
+                Resource:
+                  - !GetAtt OrchestratorRepo.Arn
+                  - !GetAtt ClassifierRepo.Arn
+                  - !GetAtt ExtractorRepo.Arn
+                  - !GetAtt ValidatorRepo.Arn
+                  - !GetAtt EmbedderRepo.Arn
+                  - !GetAtt PipelineApiRepo.Arn
+                  - !GetAtt FrontendRepo.Arn
+              - Sid: EcrPublicPullAuth
+                Effect: Allow
+                Action: [ecr-public:GetAuthorizationToken, sts:GetServiceBearerToken]
+                Resource: "*"
+
+  ImageBuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: invoiceiq-image-builder
+      Description: Builds and pushes the seven InvoiceIQ container images.
+      ServiceRole: !GetAtt ImageBuildRole.Arn
+      TimeoutInMinutes: 45
+      Source:
+        Type: S3
+        Location: !Sub "${ArtifactBucket}/source/invoiceiq-src.zip"
+        BuildSpec: config_files/buildspec.yml
+      Artifacts:
+        Type: NO_ARTIFACTS
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_MEDIUM
+        Image: aws/codebuild/amazonlinux-x86_64-standard:5.0
+        PrivilegedMode: true
+        EnvironmentVariables:
+          - Name: ECR_REGISTRY
+            Value: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.${AWS::URLSuffix}"
+      LogsConfig:
+        CloudWatchLogs:
+          Status: ENABLED
+          GroupName: !Ref ImageBuildLogGroup
+
+Outputs:
+  InvoiceBucketName:
+    Value: !Ref InvoiceBucket
+  InvoiceBucketArn:
+    Value: !GetAtt InvoiceBucket.Arn
+  ArtifactBucketName:
+    Value: !Ref ArtifactBucket
+  VectorBucketName:
+    Description: Created by scripts/seed_memory.py (not by this stack).
+    Value: !Sub "invoiceiq-memory-${AWS::AccountId}-${AWS::Region}"
+  VectorIndexName:
+    Value: !Ref VectorIndexName
+  IntakeQueueUrl:
+    Value: !Ref IntakeQueue
+  S3FilesDataAccessRoleArn:
+    Value: !GetAtt S3FilesDataAccessRole.Arn
+  CsiControllerRoleArn:
+    Value: !GetAtt CsiControllerRole.Arn
+  CsiNodeRoleArn:
+    Value: !GetAtt CsiNodeRole.Arn
+  AgentRoleArn:
+    Value: !GetAtt AgentRole.Arn
+  PipelineApiRoleArn:
+    Value: !GetAtt PipelineApiRole.Arn
+  ImageBuildProjectName:
+    Value: !Ref ImageBuildProject
+  EcrRegistry:
+    Value: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.${AWS::URLSuffix}"

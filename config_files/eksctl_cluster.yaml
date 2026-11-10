@@ -1,0 +1,13 @@
+# EKS Auto Mode cluster. eksctl creates a new VPC with public and private subnets.
+# Render with:  envsubst < config_files/eksctl_cluster.yaml | eksctl create cluster -f -
+apiVersion: eksctl.io/v1alpha5
+kind: ClusterConfig
+metadata:
+  name: "${CLUSTER_NAME}"
+  region: "${AWS_REGION}"
+  version: "1.33"
+  tags:
+    project: invoiceiq
+autoModeConfig:
+  enabled: true
+  nodePools: [general-purpose, system]
