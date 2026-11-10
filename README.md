@@ -61,8 +61,8 @@ cluster and container builds.
   (it must include the `s3files` and `s3vectors` commands), [eksctl](https://eksctl.io/installation/),
   [kubectl](https://docs.aws.amazon.com/eks/latest/userguide/install-kubectl.html), `envsubst`
   (package `gettext`), `zip`, and Python 3.9+ with boto3 1.40 or newer. Older boto3 does not
-  know Amazon S3 Vectors. A virtual environment avoids touching your system Python:
-  `python3 -m venv .venv && source .venv/bin/activate && pip install --upgrade "boto3>=1.40.0"`.
+  know Amazon S3 Vectors. boto3 older than 1.40 fails the S3 Vectors steps with a confusing `Unknown service: 's3vectors'` or model error, so run the Python scripts from a virtual environment (it also avoids touching your system Python):
+  `python3 -m venv .venv && source .venv/bin/activate && pip install --upgrade "boto3>=1.40.0"`. Verify with `python3 -c "import boto3; print(boto3.__version__)"` (must print 1.40 or newer).
   [AWS CloudShell](https://console.aws.amazon.com/cloudshell) works; install eksctl there first.
 
 Check your CLI supports the newer services:
@@ -301,7 +301,7 @@ done
 ```
 
 Within about a minute, the **dashboard** shows all five invoices reach `memory/`, each with a
-green `PASS` verdict.
+green `PASS` verdict. In each JSON envelope this verdict is the `validation_status` field, one of `PASS`, `FLAGGED`, or `REJECTED`.
 
 Then confirm from the terminal that the outputs are real files on the mount. This command prints
 the number of files in each stage directory (it reports counts, not verdicts):
@@ -453,7 +453,7 @@ kubectl exec deployment/pipeline-api -n invoiceiq -- cat /mnt/s3files/validated/
 ```
 
 (Abbreviated: the real envelope also carries `history`, `anomaly`, and `duplicate` blocks. The
-nearest match is `invoice-007`, which reused invoice number `AC-1002` from invoice 002.)
+nearest match is whichever `AC-1002` invoice the vector query returns first, `invoice-002` or `invoice-007` (invoice 007 reused `AC-1002` from invoice 002), so the `matched_key` above can be either one from run to run.)
 
 ![Dashboard detail for invoice 008, REJECTED as a near-duplicate; closest prior invoices invoice-007 and invoice-002 at cosine distance 0.044](docs/img/invoice-008-rejected.png)
 
@@ -556,6 +556,9 @@ It takes about 20–25 minutes. Afterwards, check the CloudFormation console for
   `aws s3files get-mount-target --mount-target-id <id> --query securityGroups`.
 - **Agents log Bedrock `AccessDeniedException`.** Enable model access for Nova Pro and Titan
   Text Embeddings V2, and check that `AGENT_MODEL` is valid in your Region.
+- **`seed_memory.py` fails with Bedrock `ModelErrorException` ("try your request again").** A
+  transient Bedrock error, not a setup problem. Re-run `python3 scripts/seed_memory.py`; it is
+  safe to run again.
 - **CodeBuild fails on `pip install` or `npm ci`.** These are usually transient upstream
   errors. Re-run `./scripts/build_images.sh`.
 - **`eksctl create cluster` fails with `VpcLimitExceeded`.** Use
